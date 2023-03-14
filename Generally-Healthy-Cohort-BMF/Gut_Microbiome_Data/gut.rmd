@@ -1,0 +1,584 @@
+---
+title: "ASV Gut Microbiome CORNCOB Regression - James Johnson - v3-7-23"
+output: html_notebook
+---
+
+Let's start by reading your data:
+
+```{r}
+# Import libraries:
+# Load libraries
+# Note: commented-out libraries are experimental libraries for other functions not used in this final analysis file
+
+#load some useful libraries
+library(limma)
+library(edgeR)
+library(sns)
+library(data.table)
+library(tidyr)
+library(tidyverse)
+library(sjmisc)
+require(foreign)
+library(foreign)
+require(ggplot2)
+require(MASS)
+require(Hmisc)
+require(reshape2)
+library(stringr)
+library(rlist)
+library(rlang)
+library(forcats)
+library(dplyr)
+library(tidyverse)
+library(ggh4x)
+require(tidyselect)
+library(DataCombine)
+library(ggrepel)
+library(ggbeeswarm)
+library(ggsignif)
+library(ggpubr)
+library(btools)
+library(ggpmisc)
+library(quantreg)
+library(broom)
+library(gginnards)
+library(broom.mixed)
+library(scales)
+library(sommer)
+library(gplots)
+library(ggbreak)
+library(ggrepel)
+
+#Corncob and Phyloseq:
+library(corncob)
+library(compositions)
+library(phyloseq)
+
+# Import data:
+otus <- read.csv("gut_full.csv", check.names=F)
+taxa <- read.csv("taxa.csv",sep='\t')
+otus$sex <- factor(otus$sex) #factorize sex
+otus$vendor_dashboard <- factor(otus$vendor_dashboard)
+otus$bowel <- factor(as.numeric(factor(otus$bowel, levels = c(1,2,3,4), labels = c(1,2,3,4))))
+otus <- otus[ which(otus$vendor_dashboard == "Second Genome" | otus$vendor_dashboard == "research-microbiome"),] # keep only data where vendor is explicit
+otus$vendor_dashboard = str_replace_all(otus$vendor_dashboard,"research-microbiome","DNA Genotek")
+otus$vendor_dashboard <- factor(otus$vendor_dashboard) # factorize vendor
+#otus[ which(otus$vendor_dashboard == "Second Genome"),]
+otus <- within(otus, bowel <- relevel(bowel, ref = 3))
+
+# Pre-processing and checking validity of data
+# Algorithms provided by Christian Diener, PhD:
+##############################################################################
+dat <- otus
+otus <- otus[!duplicated(otus$public_client_id), ]
+genus_cols <- grepl("taxa_", names(otus))
+rownames(otus) <- otus$public_client_id
+sdata <- otus[, !genus_cols]
+bowel <- paste0(sdata['bowel'])
+table(sdata['bowel'])
+otus <- as.matrix(otus[, genus_cols])
+colnames(otus) <- gsub("taxa_", "", colnames(otus))
+tax_matrix <- as.matrix(taxa[, 2:ncol(taxa)])
+rownames(tax_matrix) <- taxa[, 1]
+as.data.frame(otus)
+```
+
+
+Now we convert it to fit in a phyloseq object. We need to fulfill the following rules:
+
+1. The OTU table is a matrix with rows being samples and each column being a taxon.
+2. The taxonomy table must be a matrix with rows being taxa and columns being ranks.
+3. The sample data must be data frame with rows being samples.
+
+To double check if everything works let's do some validity checks:
+
+```{r}
+stopifnot(all(rownames(otus) %in% rownames(sdata)))
+stopifnot(nrow(otus) == nrow(sdata))
+print("sample names match")
+
+stopifnot(all(colnames(otus) %in% rownames(tax_matrix)))
+stopifnot(ncol(otus) == nrow(tax_matrix))
+stopifnot(!anyDuplicated(tax_matrix))
+print("taxa look okay")
+
+stopifnot(!anyDuplicated(sdata))
+print("sample data looks okay")
+```
+
+If that passes we can go ahead and build our phyloseq object.
+
+```{r}
+ps <- phyloseq(
+  otu_table(otus, taxa_are_rows = FALSE),
+  tax_table(tax_matrix),
+  sample_data(sdata)
+)
+
+ps
+```
+
+```{r}
+names(sample_data(ps))
+bowel <- sample_data(ps)$bowel
+
+##############################################################################
+```
+
+```{r}
+#Differential Test
+#Uncomment this code chunk to run the CORNCOB modeling.
+#Otherwise, load the dv_analysis object already saved from a previously completed modeling run.
+#dv_analysis <- differentialTest(formula = ~ bowel + sex + age + BMI_CALC + vendor_dashboard + eGFR,
+#                                 phi.formula = ~ 1,
+#                                 formula_null = ~ sex + age + BMI_CALC + vendor_dashboard + eGFR,
+#                                 phi.formula_null = ~ 1,
+#                                 data = ps,
+#                                 test = "LRT", boot = FALSE,
+#                                 full_output = TRUE,
+#                                 fdr_cutoff = 0.05)
+
+#saveRDS(dv_analysis, "corncob.rds")
+```
+
+
+```{r}
+#Load a previous CORNCOB modeling
+#Click on the "corncob.rds" file in the folder with R Studio open and add the dataframe to the environment. Name it "corncob":
+dv_analysis <- corncob
+#See the significant taxa from the computation:
+dv_analysis$significant_taxa
+```
+
+
+
+```{r}
+#prepare the taxa df with FDR p values for manipulation:
+taxa<-dv_analysis$all_models
+dv_analysis$significant_taxa
+as.data.frame(dv_analysis$p_fdr)
+taxa_p <- DropNA(as.data.frame(dv_analysis$p_fdr), Var = "dv_analysis$p_fdr")
+taxa_p[1]
+taxa[[1]]$coefficients
+```
+
+
+```{r}
+#Load the arivale_phylo.rds file in the project folder and load the object into the environment.
+
+#Rarefy the genotek dataset to an even depth using phyloseq.
+sample_data(arivale_phylo) 
+#Tom Wilmanski, PhD's code:
+########################################################################################
+rarefied_genotek=rarefy_even_depth(arivale_phylo, sample.size = min(sample_sums(arivale_phylo)),
+  rngseed = 111, replace = FALSE, trimOTUs = TRUE, verbose = TRUE)
+
+richness <- estimate_richness(rarefied_genotek, measures=c("Shannon","Observed"))
+
+saveRDS(richness, "richness.rds")
+########################################################################################
+```
+
+
+```{r}
+#get Pielou's Evenness
+richness$public_client_id <-sample_data(rarefied_genotek)$public_client_id
+library(btools)
+richness$Pielou <- richness$Shannon/richness$Observed
+
+richness
+```
+
+
+```{r}
+#Check distribution of data:
+hist(richness$Pielou,
+     main = "Pielou's Evenness (Shannon/Observed ASV)",
+     xlab = "Evenness",
+     xlim = c(0,0.05),
+     breaks = 200)
+
+hist(richness$Shannon,
+     main = "Shannon Diversity",
+     xlab = "Diversity Index",
+     xlim = c(0,6),
+     breaks = 20)
+
+hist(richness$Observed,
+     main = "Observed ASVs",
+     xlab = "ASVs",
+     xlim = c(0,1000),
+     breaks = 30)
+```
+
+```{r}
+combinations <- list(c("Constipation","Low Normal"),
+                                 c("Constipation","High Normal"),
+                                 c("Constipation","Diarrhea"),
+                                 c("Low Normal","High Normal"),
+                                 c("Low Normal","Diarrhea"),
+                                 c("High Normal","Diarrhea"))
+dat$bowel <- factor(dat$bowel, levels = c("Constipation", "Low Normal", "High Normal", "Diarrhea"), labels = c("Constipation", "Low Normal", "High Normal", "Diarrhea"))
+```
+
+
+```{r}
+#Begin preparing gut microbiome data results for plotting
+#Import gut df for preprocessing:
+
+df <- read.csv("gut_full.csv", check.names=F)
+colnames(df) = gsub("nan", "Unclassified", colnames(df))
+comparisons = list(c("Constipation","High Normal"),c("Low Normal","High Normal"),c("Diarrhea","High Normal"))
+df$bowel <- factor(df$bowel, levels = c(1,2,3,4), labels = c("Constipation", "Low Normal", "High Normal", "Diarrhea"))
+df_otus <- dplyr::select(df, -c("public_client_id","bowel","vendor_dashboard","sex","age","BMI_CALC","eGFR"))
+
+df_otus <- as.data.frame(clr(as.matrix(df_otus)))
+df_select <- dplyr::select(df, c(1:7))
+df_otus <- cbind(df_select,df_otus)
+df <- df_otus
+dat <- df_otus
+
+# Create the dfs to store BMF metadata and p values for each hit
+const <- c()
+const_p <- c()
+low <- c()
+low_p <- c()
+diarrhea <- c()
+diarrhea_p <- c()
+taxa_names <- c()
+family_names <- c()
+genus_names <- c()
+likelihood <- c()
+adj_p <- c()
+names(dv_analysis$p) = gsub("nan", "Unclassified", names(dv_analysis$p))
+
+#Add all the p values and metadata to the right dfs:
+for (i in 1:length(dv_analysis$all_models[names(dv_analysis$p)])) {
+  const_p[i] <- dv_analysis$all_models[[i]]$coefficients[2,4]
+  const[i] <- dv_analysis$all_models[[i]]$coefficients[2,1]
+  low_p[i] <- dv_analysis$all_models[[i]]$coefficients[3,4]
+  low[i] <- dv_analysis$all_models[[i]]$coefficients[3,1]
+  diarrhea_p[i] <- dv_analysis$all_models[[i]]$coefficients[4,4]
+  diarrhea[i] <- dv_analysis$all_models[[i]]$coefficients[4,1]
+  taxa_names[i] <- names(dv_analysis$p)[i]
+  family_names[i] <- strsplit(taxa_names[i],'.',fixed=TRUE)[[1]][5]
+  genus_names[i] <- strsplit(taxa_names[i],'.',fixed=TRUE)[[1]][6]
+  likelihood[i] <- dv_analysis$all_models[[i]]$logL
+  adj_p[i] <- dv_analysis$p_fdr[[i]]
+}
+genus_names[i] <- strsplit(taxa_names[i],'.',fixed=TRUE)[[1]][6]
+
+#Create final p-value df:
+p_df <- bind_cols(taxa_names,family_names,genus_names, likelihood, adj_p, const,const_p,low,low_p,diarrhea,diarrhea_p)
+names(p_df) <- c("Genera","Family","Genus","LogL","Adj.P","Const.Beta","Const.P.Val","Low.Beta","Low.P.Val","Diarrhea.Beta","Diarrhea.P.Val")
+p_df$Combined <- paste(p_df$Family,p_df$Genus)
+ab <- colSums(df_otus[names(df_otus) %in% paste("taxa_",names(dv_analysis$p),sep="")])/colSums(!!df_otus[names(df_otus) %in% paste("taxa_",names(dv_analysis$p),sep="")])
+p_df$Mean.Abundance <- ab[paste("taxa_",p_df$Genera,sep="")]
+p_df$Const.Adj.P.Val <- p.adjust(const_p, method = "fdr", n = length(const_p))
+p_df$Low.Adj.P.Val <- p.adjust(low_p, method = "fdr", n = length(low_p))
+p_df$Diarrhea.Adj.P.Val <- p.adjust(diarrhea_p, method = "fdr", n = length(diarrhea_p))
+p_df <- p_df[order(-p_df$Mean.Abundance),]
+set <- subset(p_df[which(p_df$Adj.P < 0.05),], Genus != 'Unclassified')
+set <- subset(set[order(-set$Mean.Abundance),], Genus != 'Unclassified')
+abundant_list <- list()
+abundant_genus <- list()
+abundant <- paste("taxa_",set[order(-set$Mean.Abundance),]$Genera,sep="")
+for (i in 1:68) {
+  abundant_list[i] <- paste(strsplit(abundant[i],'.',fixed=TRUE)[[1]][5],strsplit(abundant[i],'.',fixed=TRUE)[[1]][6])
+  abundant_genus[i] <- paste(strsplit(abundant[i],'.',fixed=TRUE)[[1]][6])
+}
+
+#top 10 most abundant non-unclassified hits
+abundant_trunc <- set[match(abundant_list[!is.na(set$Combined[match(abundant_list,set$Combined)])],set$Combined),][which(set$Adj.P<0.05),]$Combined[1:10]
+`%!in%` <- Negate(`%in%`)
+t <- set[set$Combined %!in% abundant_trunc,]
+
+#create the set of hits that are top 10 most abundant, Akkermansia, and top 9 most significant = 20 hits:
+span <- rbind(set[order(set[-order(set[!set$Combined %in% abundant_trunc,]$Adj.P),][which(set$Adj.P<0.05),]$Mean.Abundance %!in% abundant_trunc),][1:10,],
+t[match('Akkermansiaceae Akkermansia',t$Combined),],
+t[order(t$Const.Adj.P.Val),][1:9,])
+span$Letters <- LETTERS[1:20]
+p_df$Letters <- c(NA)
+test <- rbind(span,p_df[p_df$Combined %!in% span$Combined,])
+test <- test[!duplicated(test$Genera),]
+p_df <- test
+p_df <- p_df[order(p_df$Adj.P),]
+p_df <- p_df[order(-p_df$Mean.Abundance),]
+```
+
+
+```{r}
+#Pielou's Evenness:
+model = y ~ x
+df_num <- merge(richness, df_otus, by="public_client_id")
+df_num$bowel <- factor(df_num$bowel, order = TRUE)
+d1_plot <- lm(Pielou ~ bowel, data = df_num)
+pval1 = summary(d1_plot)$coefficients[2,4]
+r1 = summary(d1_plot)$adj.r.squared
+pval1
+r1
+
+d1 <- ggplot(data = df_num, aes(x = factor(bowel, level = c("Constipation", "Low Normal", "High Normal", "Diarrhea"), labels = c("Constipation", "Low Normal", "High Normal", "Diarrhea")), y = Pielou, group = factor(bowel))) +
+  scale_x_discrete(bquote(atop(~italic("adj R")^2~" = "~.(formatC(as.numeric(r1),3)),~italic("P value")~" = "~.(formatC(as.numeric(pval1),3)))))+
+  geom_beeswarm(aes(color = bowel), cex = 0.5) +
+  geom_boxplot(alpha=0) +
+  ylim(0.005,0.05)+
+  geom_smooth(method = "lm", formula = y ~ x, aes(group = 1)) +
+  ggtitle(label = "C)\nPielou's Evenness vs BMF") +
+  xlab("Bowel Movement Frequency (BMF)") +
+  ylab("Pielou's Evenness") +
+  scale_colour_discrete(name="BMF Category", limits = c("Constipation", "Low Normal", "High Normal", "Diarrhea"), labels=c("Constipation", "Low Normal", "High Normal", "Diarrhea")) +
+  guides(colour = guide_legend(override.aes = list(size=7))) +
+  theme(plot.title = element_text(size=10), legend.text = element_text(size = 10), legend.title = element_text(size = 10), axis.text.x = element_blank(), axis.title.y = element_text(size = 10))
+d1
+
+#Shannon Diversity:
+model = y ~ x
+d2_plot <- lm(Shannon ~ bowel, data = df_num)
+pval2 = summary(d2_plot)$coefficients[2,4]
+r2 = summary(d2_plot)$adj.r.squared
+pval2
+r2
+
+d2 <- ggplot(data = df_num, aes(x = factor(bowel, level = c("Constipation", "Low Normal", "High Normal", "Diarrhea"), labels = c("Constipation", "Low Normal", "High Normal", "Diarrhea")), y = Shannon, group = bowel)) +
+  scale_x_discrete(bquote(atop(~italic("adj R")^2~" = "~.(formatC(as.numeric(r2),3)),~italic("P value")~" = "~.(formatC(as.numeric(pval2),3)))))+
+  geom_beeswarm(aes(color = factor(bowel)), cex = 0.5) +
+  geom_boxplot(alpha=0) +
+  geom_smooth(method = "lm", formula = y ~ x, aes(group = 1)) +
+  ggtitle(label = "B)\nShannon Diversity vs BMF") +
+  xlab("Bowel Movement Frequency (BMF)") +
+  ylab("Shannon Diversity") +
+  scale_colour_discrete(name="BMF Category", limits = c("Constipation", "Low Normal", "High Normal", "Diarrhea"), labels=c("Constipation", "Low Normal", "High Normal", "Diarrhea")) +
+  guides(colour = guide_legend(override.aes = list(size=7))) +
+  theme(plot.title = element_text(size=10), legend.text = element_text(size = 10), legend.title = element_text(size = 10), axis.text.x = element_blank(), axis.title.y = element_text(size = 10))
+d2
+
+#Observed ASVs:
+model = y ~ x
+d3_plot <- lm(Observed ~ bowel, data = df_num)
+pval3 = summary(d3_plot)$coefficients[2,4]
+r3 = summary(d3_plot)$adj.r.squared
+pval3
+r3
+
+d3 <- ggplot(data = df_num, aes(x = factor(bowel, level = c("Constipation", "Low Normal", "High Normal", "Diarrhea"), labels = c("Constipation", "Low Normal", "High Normal", "Diarrhea")), y = Observed, group = bowel))+
+  scale_x_discrete(bquote(atop(~italic("adj R")^2~" = "~.(formatC(as.numeric(r3),3)),~italic("P value")~" = "~.(formatC(as.numeric(pval3),3)))))+
+  geom_beeswarm(aes(color = factor(bowel)), cex = 0.5) +
+  geom_boxplot(alpha=0) +
+  geom_smooth(method = "lm", formula = y ~ x, aes(group = 1)) +
+  ggtitle(label = "A)\nObserved ASVs vs BMF") +
+  xlab("Bowel Movement Frequency (BMF)") +
+  ylab("Observed ASVs") +
+  scale_colour_discrete(name="BMF Category", limits = c("Constipation", "Low Normal", "High Normal", "Diarrhea"), labels=c("Constipation", "Low Normal", "High Normal", "Diarrhea")) +
+  guides(colour = guide_legend(override.aes = list(size=7))) +
+  theme(plot.title = element_text(size=10), legend.text = element_text(size = 10), legend.title = element_text(size = 10), axis.text.x = element_blank(), axis.title.y = element_text(size = 10))
+d3
+
+PSO <- ggarrange(d3, d2, d1, legend = "top", align = "hv", common.legend = TRUE, widths = c(7,7,7), heights = c(20,20,20), nrow = 1, ncol = 3)+ theme(plot.margin = margin(0,0,0,0))
+PSO
+ggsave(
+  "PSOvBMF.png",
+  plot = PSO,
+  device = NULL,
+  path = NULL,
+  scale = 1,
+  width = NA,
+  height = NA,
+  units = c("in", "cm", "mm", "px"),
+  dpi = 300,
+  limitsize = TRUE,
+  bg = NULL
+)
+```
+
+
+
+```{r}
+#Annotation function:
+sig = function(x){
+  if(x < 0.001){"***"} 
+  else if(x < 0.01){"**"}
+  else if(x < 0.05){"*"}
+  else{NA}}
+
+#use gut df to construct column-specific df for plotting function
+df <- read.csv("gut_full.csv", check.names=F)
+colnames(df) = gsub("nan", "Unclassified", colnames(df))
+comparisons = list(c("Constipation","High Normal"),c("Low Normal","High Normal"),c("Diarrhea","High Normal"))
+df$bowel <- factor(df$bowel, levels = c(1,2,3,4), labels = c("Constipation", "Low Normal", "High Normal", "Diarrhea"))
+df_otus <- dplyr::select(df, -c("public_client_id","bowel","vendor_dashboard","sex","age","BMI_CALC","eGFR"))
+
+#refresh dataframes:
+df_otus <- as.data.frame(clr(as.matrix(df_otus)))
+df_select <- dplyr::select(df, c(1:7))
+df_otus <- cbind(df_select,df_otus)
+df <- df_otus
+dat <- df_otus
+
+#Initialize vectors:
+df$p.value <- NA
+df$pval <- NULL
+df$p.val <- NULL
+counter <<- 1
+
+#Plotting:
+
+# Special Graphing Function:
+########################################
+test = function(x,y,z,j) {
+  work <- NULL
+  results <- NULL
+  x = NULL
+  y = NULL
+  if (counter == 1) {z = comparisons[[1]][1]}
+  else if (counter == 2) {z = comparisons[[2]][1]}
+  else if (counter > 2) {z = comparisons[[3]][1]}
+  temp <- data.frame("name" = NA, "p.value" = NA, "bowel" = NA)
+  for (i in 1:20) {
+    temp$name <- paste("genus_",span$Genera[[i]],sep="")
+    temp$p.value <- span$Const.Adj.P.Val[[i]] 
+    temp$bowel <- "Constipation"
+    work <- rbind(work,temp)
+    temp$p.value <- span$Low.Adj.P.Val[[i]] 
+    temp$bowel <- "Low Normal"
+    work <- rbind(work,temp)
+    temp$p.value <- span$Diarrhea.Adj.P.Val[[i]] 
+    temp$bowel <- "Diarrhea"
+    work <- rbind(work,temp)
+  }
+  if (z[[1]][1] == comparisons[[1]][1]) {results <- list(p.value = work$p.value[3*(j-1)+1])}
+  else if (z[[1]][1] == comparisons[[2]][1]) {results <- list(p.value = work$p.value[3*(j-1)+1+1]) }
+  else if (z[[1]][1] == comparisons[[3]][1]) {results <- list(p.value = work$p.value[3*(j-1)+1+2])}
+  counter<<-counter+1
+  if (counter > 3) {counter<<-1}
+  return(results)
+}
+########################################
+
+#Store plots in list of plots for looping to plot next:
+myplots <- list()  # new empty list
+df_test <- df
+df_test[df_test==0] <- NA
+for (genera in 1:20) {
+  y_name <- paste("taxa_",span$Genera[genera],sep="")
+  myplots[[genera]] <- local({
+    plotlim_lower = min(
+df_test[!is.na(df_test[y_name]),][y_name])
+    plotlim_upper = max(
+df_test[!is.na(df_test[y_name]),][y_name])
+    plotlim_bar = plotlim_lower - 4
+    plotlim_margin = 6
+    genera <- genera
+    plt <- ggplot(data = df_test, aes(x = bowel, y = .data[[y_name]], group = bowel)) +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+    geom_jitter(aes(color = bowel),  size = 0.1, cex = 0.05) +
+    geom_boxplot(data = df_test, alpha=0.0,outlier.shape = NA) +
+    theme(text = element_text(size = 9)) +
+    ggtitle(label = paste(span$Family[genera],"\n",span$Genus[genera],sep="")) +
+    geom_signif(data = df_test, comparisons = comparisons, map_signif_level = sig, test = 'test', test.args = list(z = comparisons, j = genera), y_position = plotlim_bar,step_increase = 0.15,  size = 0.5, 
+                textsize = 1.5,
+                tip_length = c(0,0)) +
+    coord_cartesian(ylim=c(plotlim_lower,plotlim_upper),clip="off")+
+    labs(color = "BMF Category", y = ifelse((genera == 1 | genera  == 6 | genera  == 11 | genera == 16),"CLR Abundance","")) +
+    guides(colour = guide_legend(override.aes = list(size=7), title.position = 'left', nrow = 1, ncol = 4)) +
+    theme(plot.margin = unit(c(0,0,plotlim_margin,0), "cm"), 
+          plot.title = element_text(size=5.75), 
+          legend.title = element_text(size=10), 
+          plot.subtitle = element_text(size=10), 
+          legend.text = element_text(size=7),
+          axis.text.x = element_blank(), 
+          axis.text.y = element_text(size=7), 
+          axis.title.y = element_text(size=7),
+          axis.title.x = element_blank(),
+          aspect.ratio = 0.95)
+  })
+}
+
+
+```
+
+
+```{r}
+#Truncate to the top 20 including Akkermansia, most abundant, and most significant:
+title <- list()
+for(i in seq(1:20)) { title[i] <- myplots[[c(i)]]$labels$title }
+plots1 <- myplots[title %in% paste(
+  span$Family,
+  "\n",
+  span$Genus,sep="")][1:20]
+plots_final <- plots1[!sapply(plots1,is.null)]
+
+#Arrange the plots:
+final1 <- ggarrange(plotlist = plots_final[1:5], labels = LETTERS[1:5], legend = "top", align = "hv", font.label = list(size = 8), common.legend = TRUE, nrow = 1, ncol = 5) + theme(plot.margin = unit(c(0,0,0,0), "cm"))
+final1
+final2 <- ggarrange(plotlist = plots_final[6:10], labels = LETTERS[6:10], legend = "top", align = "hv", font.label = list(size = 8), common.legend = TRUE, nrow = 1, ncol = 5) + theme(plot.margin = unit(c(0,0,0,0), "cm"))
+final2
+
+final3 <- ggarrange(plotlist = plots_final[11:15], labels = LETTERS[11:15], legend = "top", align = "hv", font.label = list(size = 8), common.legend = TRUE, nrow = 1, ncol = 5) + theme(plot.margin = unit(c(0,0,0,0), "cm"))
+final3
+final4 <- ggarrange(plotlist = plots_final[16:20], labels = LETTERS[16:20], legend = "top", align = "hv", font.label = list(size = 8), common.legend = TRUE, nrow = 1, ncol = 5) + theme(plot.margin = unit(c(0,0,0,0), "cm"))
+final4
+
+final_main <- ggarrange(plotlist = plots_final[1:20], labels = LETTERS[1:20], legend = "top", align = "hv", common.legend = TRUE, nrow = 4, ncol = 5)
+
+ggsave(
+  "BMFvsGenera1.png",
+  plot = final1,
+  device = NULL,
+  path = NULL,
+  scale = 1.5,
+  width = NA,
+  height = NA,
+  units = c("in", "cm", "mm", "px"),
+  dpi = 300,
+  limitsize = TRUE,
+  bg = NULL
+)
+
+ggsave(
+  "BMFvsGenera2.png",
+  plot = final2,
+  device = NULL,
+  path = NULL,
+  scale = 1.5,
+  width = NA,
+  height = NA,
+  units = c("in", "cm", "mm", "px"),
+  dpi = 300,
+  limitsize = TRUE,
+  bg = NULL
+)
+
+ggsave(
+  "BMFvsGenera3.png",
+  plot = final3,
+  device = NULL,
+  path = NULL,
+  scale = 1.5,
+  width = NA,
+  height = NA,
+  units = c("in", "cm", "mm", "px"),
+  dpi = 300,
+  limitsize = TRUE,
+  bg = NULL
+)
+
+ggsave(
+  "BMFvsGenera4.png",
+  plot = final4,
+  device = NULL,
+  path = NULL,
+  scale = 1.5,
+  width = NA,
+  height = NA,
+  units = c("in", "cm", "mm", "px"),
+  dpi = 300,
+  limitsize = TRUE,
+  bg = NULL
+)
+
+
+```
+
+
+

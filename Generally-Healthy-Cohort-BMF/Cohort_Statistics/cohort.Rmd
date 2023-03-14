@@ -1,0 +1,270 @@
+---
+title: "Cohort Summary Statistics - James Johnson - v3-7-23"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+
+```{r}
+#load some useful libraries
+require(foreign)
+library(foreign)
+require(ggplot2)
+require(MASS)
+require(Hmisc)
+require(reshape2)
+library(stringr)
+library(rlist)
+library(rlang)
+library(forcats)
+library(dplyr)
+library(tidyverse)
+library(ggh4x)
+require(tidyselect)
+library(DataCombine)
+library(ggrepel)
+library(ggbeeswarm)
+library(ggsignif)
+library(ggpubr)
+```
+
+
+```{r}
+statdata <- read.csv('../Gut_Microbiome_Data/gut_full.csv', check.names=F)
+dfOR = data.frame(matrix(ncol = 0, nrow = 4))
+dfOR_ci = data.frame(matrix(ncol = 0, nrow = 4))
+#Summary Statistics of Cohort
+#print(col)
+pom <- polr(factor(bowel, ordered = TRUE) ~BMI_CALC + factor(sex) + age + eGFR, data=statdata, Hess=TRUE, control=list(maxit=300))
+  
+## store table
+(ctable <- coef(summary(pom)))
+#print(ctable)
+
+## calculate and store p values
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+#print(p)
+## combined table
+ctable <- cbind(ctable, "p value" = p)
+ci <- confint(pom) # default method gives profiled CIs
+
+
+## OR and CI
+dfOR_ci <- cbind(exp(cbind('variable' = coef(pom), ci)),dfOR_ci)
+dfOR <- cbind('p value' = p[1:4],dfOR)
+
+#P value dataframe for all variables
+colnames(dfOR)[which((names(dfOR) == 'p value') | (names(dfOR) == '2.5 %') | (names(dfOR) == '97.5 %'))]   <- paste(c('p value','2.5 %', '97.5 %'),sep="-")
+
+#Odds Ratio & CI dataframe for all variables
+colnames(dfOR_ci)[which((names(dfOR_ci) == 'variable') | (names(dfOR_ci) == '2.5 %') | (names(dfOR_ci) == '97.5 %'))]   <- paste(c('variable','2.5 %', '97.5 %'),sep="-")
+  
+print(dfOR_ci)
+print(dfOR)
+```
+
+
+```{r}
+#GFR ~ bowel + covariates
+anova <- aov(eGFR ~ factor(bowel) + BMI_CALC + factor(sex) + age, data = statdata)
+  
+## store table
+summary(anova)
+```
+
+
+```{r}
+#Depression data from health history data of Arivale
+dep <- read.csv('../Survey_Data/depression.csv', check.names=F)
+dfOR = data.frame(matrix(ncol = 0, nrow = 7))
+dfOR_ci = data.frame(matrix(ncol = 0, nrow = 7))
+dep <- dep[,2:ncol(dep)]
+dep[dep == 'FALSE'] <- 0
+dep[dep == 'TRUE'] <- 1
+dep$bowel <- factor(dep$bowel) #factorize BMF
+dep$sex <- factor(dep$sex) #factorize sex
+dep <- within(dep, bowel <- relevel(bowel, ref = "High Normal")) #set the reference category as "High Normal" BMF
+
+dep[,c(6:ncol(dep))][sapply(dep[,c(6:ncol(dep))], is.double)] <- lapply(dep[,c(6:ncol(dep))][sapply(dep[,c(6:ncol(dep))], is.double)], 
+                                       as.factor)
+my_names <- names(dep)[-which(colnames(dep) == 'bowel'| colnames(dep) == 'BMI_CALC' | colnames(dep) == 'sex' | colnames(dep) == 'age' | colnames(dep) == 'eGFR')]
+
+i = 5
+p = data.frame(matrix(ncol = 0, nrow = 7))
+for(col in my_names){
+  i = i + 1
+  pom[[i-5]] <- glm(get(my_names[[i-5]]) ~ bowel + sex + age + BMI_CALC + eGFR, data = dep, family="binomial")
+  print(summary(pom[[i-5]]))
+  p[[i-5]] <- coef(summary(pom[[i-5]]))[2:8,4]
+  p[[i-5]] <- p.adjust(p[[i-5]], method = "fdr", n = (length(dep) - 5))
+  names(p)[i-5] <- paste0(my_names[[i-5]],sep="")
+}
+
+print(p)
+depression <- dep
+
+#Anxiety data from health history data of Arivale
+anx <- read.csv('../Survey_Data/anxiety.csv', check.names=F)
+dfOR = data.frame(matrix(ncol = 0, nrow = 7))
+dfOR_ci = data.frame(matrix(ncol = 0, nrow = 7))
+anx <- anx[,2:ncol(anx)]
+anx[anx == 'FALSE'] <- 0
+anx[anx == 'TRUE'] <- 1
+anx$bowel <- factor(anx$bowel)
+anx$sex <- factor(anx$sex)
+anx <- within(anx, bowel <- relevel(bowel, ref = "High Normal"))
+
+anx[,c(6:ncol(anx))][sapply(anx[,c(6:ncol(anx))], is.double)] <- lapply(anx[,c(6:ncol(anx))][sapply(anx[,c(6:ncol(anx))], is.double)], 
+                                       as.factor)
+my_names <- names(anx)[-which(colnames(anx) == 'bowel'| colnames(anx) == 'BMI_CALC' | colnames(anx) == 'sex' | colnames(anx) == 'age' | colnames(anx) == 'eGFR')]
+
+i = 5
+p = data.frame(matrix(ncol = 0, nrow = 7))
+for(col in my_names){  
+  i = i + 1
+  pom[[i-5]] <- glm(get(my_names[[i-5]]) ~ bowel + sex + age + BMI_CALC + eGFR, data = anx, family="binomial")
+  print(summary(pom[[i-5]]))
+  p[[i-5]] <- coef(summary(pom[[i-5]]))[2:8,4]
+  p[[i-5]] <- p.adjust(p[[i-5]], method = "fdr", n = (length(anx) - 5))
+  names(p)[i-5] <- paste0(my_names[[i-5]],sep="")
+}
+
+print(p)
+anxiety <- anx
+anxiety
+```
+
+
+
+```{r}
+#set the right order of factors:
+order = c("Constipation", "Low Normal", "High Normal", "Diarrhea")
+
+#import the dataframe with cohort information:
+df <- DropNA(read.csv(file = 'cohort.csv'))
+names(df) <- sapply(str_remove_all(colnames(df),"X"),"[")
+
+#some summary statistics:
+mean(df$BMI_CALC)
+sd(df$BMI_CALC)
+min(df$age)
+max(df$age)
+
+df$sex <- factor(df$sex) #factorize sex
+df$bowel <- factor(df$bowel, levels = c(1,2,3,4), labels = c("Constipation","Low Normal","High Normal","Diarrhea")) #factorize BMF
+df <- within(df, bowel <- relevel(bowel, ref = "High Normal")) #relevel BMF
+
+
+#for graphing purposes:
+df$BMI_CALC <- cut(df$BMI_CALC,
+                       breaks=c(0,18.5,25,30,100),
+                       labels=c('Underweight', 'Normal', 'Overweight', 'Obese'))
+df$eGFR <- cut(df$eGFR,
+                       breaks=c(0,60,150),
+                       labels=c('Kidney Dysfunction (GFR < 60)', 'Normal (GFR ≥ 60)'))
+df[which(df$eGFR == 'Kidney Dysfunction (GFR < 60)' | df$eGFR == 'Normal (GFR ≥ 60)'),]
+
+```
+
+
+
+```{r}
+#Plotting section with ggplot:
+plot_sex <- ggplot(df, aes(x = sex, fill = bowel)) + 
+    geom_bar(position="fill", stat="count") +
+    scale_fill_discrete(name="BMF Category",limits = c("Constipation","Low Normal","High Normal","Diarrhea"), labels = c("Constipation","Low Normal","High Normal","Diarrhea")) +
+    xlab("Sex") +
+    ylab("Fraction of Individuals in BMF Category")+
+    ggtitle("A) Cohort by Sex")+
+    geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.65, size=1.75, stat = "count", position = "fill", direction = "y", segment.color = NA, point.size = NA, force =20, force_pull=20, ylim = c(0.1,0.9))+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=8), axis.title.y = element_text(size=9), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5.5), legend.title = element_text(size = 9))
+
+plot_sex
+```
+
+
+```{r}
+plot_BMI <- ggplot(df, aes(x = BMI_CALC, fill = bowel)) + 
+    geom_bar(position="fill", stat="count") +
+    scale_fill_discrete(name="BMF Category",limits = c("Constipation","Low Normal","High Normal","Diarrhea"), labels = c("Constipation","Low Normal","High Normal","Diarrhea")) +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+    xlab("BMI") +
+    ylab("Fraction of Individuals in BMF Category")+
+    ggtitle("B) Cohort by BMI")+
+    geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.65, size=1.75, stat = "count", position = "fill", direction = "y", segment.color = NA,  point.size = NA, force =20, force_pull=20, ylim = c(0.1,0.9))+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=8), axis.title.y = element_blank(), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5.5), legend.title = element_text(size = 9))
+plot_BMI
+```
+
+
+```{r}
+plot_GFR <- ggplot(df, aes(x = eGFR, fill = bowel)) + 
+    geom_bar(position="fill", stat="count") +
+    scale_fill_discrete(name="BMF Category",limits = c("Constipation","Low Normal","High Normal","Diarrhea"), labels = c("Constipation","Low Normal","High Normal","Diarrhea")) +
+    xlab("GFR") +
+    ylab("Fraction of Individuals in BMF Category")+
+    ggtitle("C) Cohort by GFR")+
+    geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.65, size=1.75, stat = "count", position = "fill", direction = "y",  segment.color = NA, point.size = NA, force =20, force_pull=20, ylim = c(0.1,0.9))+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=8), axis.title.y = element_blank(), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5.5), legend.title = element_text(size = 9))
+plot_GFR
+```
+
+
+```{r}
+ptr <- (read.csv(file = 'ptr_plot.csv'))
+order <- c("Constipation", "Low Normal", "High Normal", "Diarrhea")
+#pair-wise comparison
+ptr$bowel <- factor(ptr$bowel, levels = c(1,2,3,4), labels = order)
+ptr$public_client_id <- as.character(ptr$public_client_id)
+ptr <- ptr %>% distinct(public_client_id, .keep_all = TRUE)
+ptr <- ptr[c('overall_means','bowel')]
+
+p <- t.test(ptr[ptr$bowel == 'Low Normal',]$overall_means, ptr[ptr$bowel == 'High Normal',]$overall_means, data = ptr)
+
+plot_ptr <- ggplot(ptr, aes(x = ptr$bowel, y = ptr$overall_means)) + 
+    geom_beeswarm(aes(x = ptr$bowel, y = ptr$overall_means, color = ptr$bowel),size=3.5,cex=5) +
+    geom_boxplot(aes(x = factor(ptr$bowel), alpha = 0)) +
+    scale_x_discrete(limits = order, labels = order,
+                     guide = guide_axis(n.dodge = 2)) +
+    ylab("Community Average PTR\nPer Individual") +
+    xlab("BMF Category")+
+    geom_signif(comparisons = list(c("Low Normal","High Normal")), step_increase = 0.5, textsize = 4,
+                map_signif_level = TRUE, annotations = sprintf(p$p.value, fmt = '%#.3f'))  +
+    ylim(0.55,1.0) +
+    theme(plot.title = element_blank(), axis.text.x = element_text(size=8), axis.title.y = element_text(size = 9), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5.5), legend.position = 'none')+
+    scale_color_discrete(name="BMF Category") +
+    scale_alpha(guide = 'none')
+
+BMF <- ggarrange(plot_sex,plot_BMI, legend = "top", common.legend = TRUE, widths = c(7,10,20), heights = c(20,20,20), nrow = 1, ncol = 2)+
+    theme(plot.title = element_text(size=9), axis.title.y = element_text(size = 6), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5.5), legend.title = element_text(size = 9))
+PTR <- ggarrange(BMF,plot_ptr, common.legend = FALSE, widths = c(7,10,20), heights = c(20,20,20), nrow = 2, ncol = 1)+
+    theme(plot.title = element_text(size=9), axis.title.y = element_text(size = 6), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5.5), legend.title = element_text(size = 9))
+PTR
+```
+
+
+```{r}
+#Linear model of PTR data:
+ptr <- (read.csv(file = 'ptr_plot.csv'))
+order <- c("Constipation", "Low Normal", "High Normal", "Diarrhea")
+ptr$bowel <- factor(ptr$bowel, levels = c(1,2,3,4), labels = order)
+ptr <- within(ptr, bowel <- relevel(bowel, ref = "High Normal"))
+ptr$public_client_id <- as.character(ptr$public_client_id)
+ptr <- ptr %>% distinct(public_client_id, .keep_all = TRUE)
+model <- lm(overall_means ~ bowel + eGFR + sex + age + BMI_CALC, data = ptr)
+summary(model)
+```
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
