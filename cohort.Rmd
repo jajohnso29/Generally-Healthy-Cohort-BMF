@@ -1,0 +1,707 @@
+---
+title: "Cohort Summary Statistics - James Johnson - v3-7-23"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+
+```{r}
+#load some useful libraries
+require(foreign)
+library(foreign)
+require(ggplot2)
+require(MASS)
+require(Hmisc)
+require(reshape2)
+library(stringr)
+library(rlist)
+library(rlang)
+library(forcats)
+library(dplyr)
+library(tidyverse)
+#library(ggh4x)
+require(tidyselect)
+library(DataCombine)
+library(ggrepel)
+library(ggbeeswarm)
+library(ggsignif)
+library(ggpubr)
+```
+
+
+```{r}
+statdata <- read.csv('../Final_Analysis/nonPTR_cohort.csv', check.names=F)
+dfOR = data.frame(matrix(ncol = 0, nrow = 10))
+dfOR_ci = data.frame(matrix(ncol = 0, nrow = 10))
+#Summary Statistics of Cohort
+#print(col)
+pom <- polr(factor(bowel, ordered = TRUE) ~BMI_CALC + factor(sex) + age + eGFR + get('CRP HIGH SENSITIVITY') + get('LDL-CHOL CALCULATION') +get('GLYCOHEMOGLOBIN A1C') + get('PC1') + get('PC2') + get('PC3'), data=statdata, Hess=TRUE, control=list(maxit=500))
+  
+## store table
+(ctable <- coef(summary(pom)))
+print(ctable)
+
+## calculate and store p values
+p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2
+print(p)
+
+## combined table
+ctable <- cbind(ctable, "p value" = p)
+ci <- confint(pom) # default method gives profiled CIs
+
+
+## OR and CI
+dfOR_ci <- cbind(exp(cbind('variable' = coef(pom), ci)),dfOR_ci)
+dfOR <- cbind('p value' = p[1:10],dfOR)
+
+#P value dataframe for all variables
+colnames(dfOR)[which((names(dfOR) == 'p value') | (names(dfOR) == '2.5 %') | (names(dfOR) == '97.5 %'))]   <- paste(c('p value','2.5 %', '97.5 %'),sep="-")
+
+#Odds Ratio & CI dataframe for all variables
+colnames(dfOR_ci)[which((names(dfOR_ci) == 'variable') | (names(dfOR_ci) == '2.5 %') | (names(dfOR_ci) == '97.5 %'))]   <- paste(c('variable','2.5 %', '97.5 %'),sep="-")
+  
+print(dfOR_ci)
+print(dfOR)
+```
+
+
+```{r}
+#eGFR ~ bowel + covariates
+models <- glm(eGFR ~ factor(bowel) + BMI_CALC + factor(sex) + age + get('CRP HIGH SENSITIVITY') + get("LDL-CHOL CALCULATION") + get('GLYCOHEMOGLOBIN A1C') + PC1 + PC2 + PC3, data = statdata)
+  
+## store table
+summary(models)
+
+summary(p[[1]])
+```
+```{r}
+paste0(c('p value'),col,sep="-")
+colnames(dfOR)[which(names(dfOR) == 'p value')]
+```
+
+
+
+```{r}
+#Depression data from health history data of Arivale
+dep <- read.csv('../Final_Analysis/depression.csv', check.names=F)
+anx <- read.csv('../Final_Analysis/anxiety.csv', check.names=F)
+
+
+p_o_m <- function(df) {
+  df <- df
+  covar = 12 # set # of covariates
+  filter <- df[,(covar+1):ncol(df)]
+  filter[filter == 'FALSE'] <- 0
+  filter[filter == 'TRUE'] <- 1
+  df <- cbind(df[,1:(covar)],filter)
+  df$sex <- factor(df$sex) #factorize sex
+  df$bowel <- factor(df$bowel, levels = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), labels = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), ordered = FALSE)
+  df <- within(df, bowel <- relevel(bowel, ref = "High\nNormal")) #set the reference category as "High Normal" BMF
+  print(df)
+  my_names <- paste0(colnames(df[,str_detect(colnames(df),"assessment")]))
+  
+  #Remove any factors that have less than 5 responses per factor:
+  df <- cbind(df[,1:(covar+0)],Filter(function(x) !any(table(x) < 5), df[,(covar+1):ncol(df)]))
+  
+  df <- df %>%
+    dplyr::select(c('public_client_id','bowel','sex','age','BMI_CALC','eGFR','CRP HIGH SENSITIVITY','LDL-CHOL CALCULATION','GLYCOHEMOGLOBIN A1C','PC1','PC2','PC3'), everything())
+  
+  dfOR = data.frame(matrix(ncol = 0, nrow = covar))
+  dfOR_ci = data.frame(matrix(ncol = 0, nrow = covar))
+  p = list()
+  ci <- list()
+  
+  for(i in 1:length(my_names)) {
+    pom[[i]] <- glm(get(my_names[[i]]) ~ bowel + sex + age + BMI_CALC + eGFR + get('PC1') + get('PC2') + get('PC3') + get('CRP HIGH SENSITIVITY') + get('LDL-CHOL CALCULATION') + get('GLYCOHEMOGLOBIN A1C'), data = df, family="binomial")
+    p[[i]] <- coef(summary(pom[[i]]))[1:covar,4]
+    p[[i]] <- p.adjust(p[[i]][1:covar], method = "fdr", n = (covar+1))
+  }
+  names(p) <- paste0(my_names,sep="")
+  p <- do.call(cbind.data.frame, p)
+  for(i in 1:(length(my_names))) {
+  
+   dfOR <- cbind('p value' = p[[i]],dfOR)
+   print(dfOR)       
+    #P value dataframe for all variables
+   colnames(dfOR)[which(names(dfOR) == 'p value')]   <- paste(c('p value'),my_names[i],sep="-")
+  }
+  return(p)
+}
+
+
+dfOR_anx <- p_o_m(anx)
+dfOR_dep <- p_o_m(dep)
+
+dfOR_anx
+dfOR_dep
+```
+```{r}
+dep
+```
+
+
+```{r}
+results <- function (input) {
+  result <- c()
+  for (i in 1:ncol(input)) {
+    if (any(input[2:4,i] < 0.1)) {
+     result[length(result)+1] <- colnames(input)[i]
+    }
+  }
+  return(result)
+}
+
+order <- c("Constipation", "Low\nNormal", "High\nNormal", "Diarrhea")
+
+results(dfOR_anx)
+results(dfOR_dep)
+dfOR_anx[,results(dfOR_anx)]
+dfOR_dep[,c(results(dfOR_dep))]
+```
+
+
+```{r}
+anx$bowel <- factor(anx$bowel)
+dep$bowel <- factor(dep$bowel)
+
+color_df <- function (df) {
+  hues <- c()
+  for (i in 1:dim(df)[1]) {
+      if (str_equal(df$bowel[i],'Constipation')) {
+          hues[i] = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2)]
+        } else if (str_equal(df$bowel[i],"Low\nNormal")) {
+          hues[i] = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(3)]
+        } else if (str_equal(df$bowel[i],'High\nNormal')) {
+          hues[i] = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(4)]
+        } else if (str_equal(df$bowel[i], "Diarrhea")) {
+          hues[i] = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(1)]
+        }
+  }
+  df$color <- factor(hues)
+  return(df)
+}
+
+anx <- color_df(DropNA(anx[,c('bowel',results(dfOR_anx))]))
+anx
+
+insert_pieces <- list()
+counter <<- 1
+insert <- str_split(results(dfOR_anx),":")
+insert <- str_split(insert[[1]][3],"_")
+for (i in insert) { 
+  insert_pieces[[counter]] <- paste0(i,"\n")
+  counter <<- counter+1
+}
+counter<<-1
+
+for (i in 1:4) { insert_full[i] <- insert_pieces[[1]][i] }
+text <- paste0(LETTERS[7],
+              ") Cohort by\n", paste0(insert_full[1],insert_full[2],insert_full[3],insert_full[4]), str_split(results(dfOR_anx),":")[[1]][4])
+plot_anx <- ggplot(anx, aes(x = get(results(dfOR_anx)), fill = factor(bowel))) + 
+    geom_bar(position="fill", stat="count") +
+    scale_fill_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)], name="BMF Category",limits = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), labels = c("Constipation","Low\nNormal","High\nNormal","Diarrhea")) +
+    #scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+    xlab(paste0(insert_full[1],insert_full[2],insert_full[3],insert_full[4], str_split(results(dfOR_anx),":")[[1]][4])) +
+    ylab("Fraction of Individuals in BMF Category")+
+    ggtitle(paste0(text))+
+    geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.085, size=1.15, box.padding = 0.02, label.padding = 0.15, stat = "count", position = "fill", direction = "y", force = 9.5, force_pull = 0.1, segment.color = NA, point.size = 0.35)+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=6), axis.text.x = element_text(size=6), axis.title.y = element_text(size=5), axis.title.x = element_text(size = 5), axis.text.y = element_text(size = 5.5), legend.title = element_text(size = 9))+
+  scale_color_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)])
+
+plot_anx
+```
+
+```{r}
+results(dfOR_dep)
+```
+
+```{r}
+dep <- color_df(DropNA(dep[,c('bowel',results(dfOR_dep))]))
+dep
+
+plot_dep <- list()
+for (depression in 1:length(results(dfOR_dep))) {
+  insert_pieces <- list()
+  insert_full <- list()
+  counter <<- 1
+  insert <- str_split(results(dfOR_dep)[[depression]],":")
+  insert <- str_split(insert[[1]][3],"_")
+  print(insert)
+  for (i in insert) { 
+    insert_pieces[[counter]] <- paste0(i,"\n")
+    counter <<- counter+1
+  }
+  counter<<-1
+  for (i in 1:length(results(dfOR_dep))) { 
+    insert_full[i] <- insert_pieces[[1]][i] 
+  }
+  text <- paste0(LETTERS[depression+7],
+              ") Cohort by\n",  paste0(ifelse(!is.na(insert_full[[1]][1]),insert_full[[1]][1],""),
+                                       ifelse(!is.na(insert_full[[2]][1]),insert_full[[2]][1],""),
+                                       ifelse(!is.na(insert_full[[3]][1]),insert_full[[3]][1],"")), str_split(results(dfOR_dep),":")[[depression]][4])
+  print(text)
+  
+  plot_dep[[depression]] <- ggplot(dep, aes(x = get(results(dfOR_dep)[depression]), fill = factor(bowel))) + 
+      geom_bar(position="fill", stat="count") +
+      scale_fill_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)], name="BMF Category",limits = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), labels = c("Constipation","Low\nNormal","High\nNormal","Diarrhea")) +
+      #scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+      xlab(paste0(paste0(str_split(results(dfOR_dep),":")[[depression]][3]),"\n",paste0(str_split(results(dfOR_dep),":")[[depression]][4]))) +
+      labs(color = "BMF Category", y = ifelse(depression == 1 | depression == 4, "Fraction of Individuals\nin BMF Category","")) +
+      ggtitle(text)+
+      geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.085, size=1.15, box.padding = 0.02, label.padding = 0.15, stat = "count", position = "fill", direction = "y", force = 66, force_pull = 0.1, segment.color = NA, point.size = 0.35)+
+      guides(fill = guide_legend(override.aes = aes(color = NA)))+
+      theme(plot.title = element_text(size=5), axis.text.x = element_text(size=6), axis.title.y = element_text(size=5), axis.title.x = element_text(size = 3), axis.text.y = element_text(size = 5.5), legend.title = element_text(size = 9))+
+      scale_color_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)])
+}
+plot_dep
+counter<<-1
+
+#significant results below:
+```
+
+
+
+
+
+```{r}
+
+for(col in 1:length(my_names)) { # or seq_along(my_list)
+  tryCatch(
+    expr = {
+    # Run POLR regression
+    pom[[col]] <- 
+      (tryCatch(expr = polr(get(my_names[[col]]) ~ bowel + BMI_CALC + sex + age + eGFR + PC1 + PC2 + PC3 + get('CRP HIGH SENSITIVITY') + get('LDL-CHOL CALCULATION') + get('GLYCOHEMOGLOBIN A1C'), data = df, Hess=TRUE, control=list(maxit=3000)), 
+            error = function(e) { 
+              print(paste("Error calculating POLR regression:",col)) 
+              return() 
+            }
+        ))
+    print(summary(pom[[col]]))
+    # Skip the iteration if the POLR regression failed
+    if (!is.object(pom[[col]])) {
+      next
+    }
+              
+    # Calculate the confidence interval
+    tryCatch(
+      expr = (ctable <- coef(summary(pom[[col]]))[2:14,4]),
+      error = function(e) {
+        print(paste("Error storing table:",col))
+        return()
+      }
+    )
+                  
+    ## calculate and store p values
+    tryCatch( 
+      expr = p <- pnorm(abs(ctable[, "t value"]), lower.tail = FALSE) * 2,
+      error = function(e) {
+        print(paste("Error calculating p-values before FDR adjustment:",col))
+          return()
+        }
+    )
+                
+    tryCatch(
+      expr = p <- p.adjust(p, method = "fdr", n = (length(my_names))),
+      error = function(e) {
+        print(paste("Error calculating FDR adjustment:",col))
+        return()
+      },
+    error = function(e) {
+        print(paste("Error calculating pom[[i]]:",col))
+      }
+    )
+    
+    ## combined table
+    tryCatch(
+      expr = ({ctable <- cbind(ctable, "p value" = p)
+      ci <- confint(pom[[col]]) # default method gives profiled CIs
+      }),
+      error = function(e) {
+        print(paste("Error calculating confidence interval:",col))
+      }
+    )
+          
+    ## OR and CI
+    dfOR_ci <- cbind(exp(cbind('variable' = coef(pom[[col]]), ci)),dfOR_ci)
+    dfOR <- cbind('p value' = p[1:13],dfOR)
+          
+    #P value dataframe for all variables
+    colnames(dfOR)[which((names(dfOR) == 'p value') | (names(dfOR) == '2.5 %') | (names(dfOR) == '97.5 %'))]   <- paste(c('p value','2.5 %', '97.5 %'),col,sep="-")
+                  
+    #Odds Ratio & CI dataframe for all variables
+    colnames(dfOR_ci)[which((names(dfOR_ci) == 'variable') | (names(dfOR_ci) == '2.5 %') | (names(dfOR_ci) == '97.5 %'))]   <- paste(c('variable','2.5 %', '97.5 %'),col,sep="-")
+                    
+    #dfOR_ci <- data.frame(dfOR_ci)
+    print(dfOR_ci)
+    print(dfOR)
+                
+    #P value dataframe for all variables
+    colnames(dfOR)[which((names(dfOR) == 'p value') | (names(dfOR) == '2.5 %') | (names(dfOR) == '97.5 %'))] <- paste(c('p value','2.5 %', '97.5 %'),col,sep="-")
+                  
+    #Odds Ratio & CI dataframe for all variables
+    colnames(dfOR_ci)[which((names(dfOR_ci) == 'variable') | (names(dfOR_ci) == '2.5 %') | (names(dfOR_ci) == '97.5 %'))] <- paste(c('variable','2.5 %', '97.5 %'),col,sep="-")
+                  
+    #dfOR_ci <- data.frame(dfOR_ci)
+    print(dfOR_ci)
+    print(dfOR)},
+    error = function(e) {
+      print(paste("Error calculating df and pom:",col))
+      return()
+    })
+}
+
+
+```
+
+
+```{r}
+library(ggthemes)
+#set the right order of factors:
+order = c("Constipation", "Low\nNormal", "High\nNormal", "Diarrhea")
+
+#import the dataframe with cohort information:
+df <- DropNA(read.csv(file = '../Final_Analysis/nonPTR_cohort.csv'))
+
+names(df) <- sapply(str_remove_all(colnames(df),"X"),"[")
+df
+
+#some summary statistics:
+mean(df$BMI_CALC)
+sd(df$BMI_CALC)
+min(df$age)
+max(df$age)
+
+df$sex <- factor(df$sex) #factorize sex
+df$bowel <- factor(df$bowel, levels = c(1,2,3,4), labels = c("Constipation","Low\nNormal","High\nNormal","Diarrhea")) #factorize BMF
+df <- within(df, bowel <- relevel(bowel, ref = "High\nNormal")) #relevel BMF
+colnames(df)[10] <- 'CRP'
+colnames(df)[11] <- 'LDL'
+colnames(df)[12] <- 'A1C'
+
+#for graphing purposes:
+#df$BMI_CALC <- cut(df$BMI_CALC,
+                       #breaks=c(0,18.5,25,30,100),
+                       #labels=c('Underweight', 'Normal', 'Overweight', 'Obese'))
+df$eGFR <- cut(df$eGFR,
+                       breaks=c(0,60,max(df$eGFR)),
+                       labels=c('Kidney Dysfunction\n(eGFR < 60)', 'Normal\n(eGFR ≥ 60)'))
+
+#df$age <- cut(df$age,
+                      # breaks=c(0,30,40,50,60,max(df$age)),
+                     #  labels=c('< 30 \nyrs', '30 \n- 40 yrs', '40 \n- 50 yrs', '50 \n- 60 yrs', '60+\nyrs'))
+
+#df$CRP <- cut(df$CRP,
+                       #breaks=c(0,0.3,1,10,max(df$CRP)),
+                       #labels=c('Normal (0 - 0.3 mg/dL)', 'Mildly Elevated\n(0.3 - 1 mg/dL)', 'Moderately\nElevated\n(1 - 10 mg/dL)','Severely\nElevated\n(> 10 mg/dL)'))
+
+#df$LDL <- cut(df$LDL,
+                      # breaks=c(0,100,160,190,max(df$LDL)),
+                      # labels=c('Normal (0 - 100 mg/dL)', 'Mildly Elevated\n(100 - 160 mg/dL)', 'Moderately\nElevated\n(160 - 190 mg/dL)','Severely\nElevated\n(> 190 mg/dL)'))
+
+#df$A1C <- cut(df$A1C,
+                    #   breaks=c(0,5.7,6.4,max(df$A1C)),
+                    #   labels=c('Normal (< 5.7%)', 'Prediabetes \n(5.7 - 6.4 %)', 'Diabetes (>= 6.5%)'))
+
+color_df <- function (df) {
+  hues <- c()
+  for (i in 1:dim(df)[1]) {
+      if (str_equal(df$bowel[i],'Constipation')) {
+          hues[i] = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2)]
+        } else if (str_equal(df$bowel[i],"Low\nNormal")) {
+          hues[i] = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(3)]
+        } else if (str_equal(df$bowel[i],'High\nNormal')) {
+          hues[i] = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(4)]
+        } else if (str_equal(df$bowel[i], "Diarrhea")) {
+          hues[i] = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(1)]
+        }
+  }
+  df$color <- factor(hues)
+  return(df)
+}
+df <- color_df(df)
+
+df
+```
+
+
+```{r}
+library(ggthemes)
+#Plotting section with ggplot:
+plot_sex <- ggplot(df, aes(x = sex, fill = bowel))+
+    geom_bar(position="fill", stat="count") +
+    scale_fill_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)],
+      name="BMF Category",
+      limits = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), 
+      labels = c("Constipation","Low\nNormal","High\nNormal","Diarrhea")) +
+    #scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+    xlab("Sex") +
+    ylab("Fraction of Individuals in BMF Category")+
+    ggtitle("A) Cohort by Sex")+
+    geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.15, size=1.05, box.padding = 0.02, label.padding = 0.25, stat = "count", position = "fill", direction = "y", force = 50, force_pull = 0.1, segment.color = NA, point.size = 0.3)+
+   guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=8), axis.title.y = element_text(size=5), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5.5), legend.title = element_text(size = 9))
+
+plot_sex
+
+plot_age <- ggplot(df, aes(x = bowel, y = age, fill = bowel, group = bowel)) + 
+    geom_boxplot()+
+    scale_fill_manual(values =ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)], name="BMF Category",limits = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), labels = c("Constipation","Low\nNormal","High\nNormal","Diarrhea")) +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2), limits = order) +
+    xlab("BMF Category") +
+    ylab("Age")+
+    ggtitle("B) Cohort by Age")+
+    #geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.5, size=1.5, stat = "count", position = "fill", direction = "y", segment.color = NA,  point.size = NA, force =20, force_pull=20, ylim = c(0.1,0.9))+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=6), axis.title.y = element_text(size=5), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5.5), legend.title = element_text(size = 9))
+plot_age
+
+```
+
+
+```{r}
+plot_BMI <- ggplot(df, aes(x = bowel, y = BMI_CALC, fill = bowel, group = factor(bowel))) + 
+    geom_boxplot()+
+    scale_fill_manual(values =ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)], name="BMF Category",limits = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), labels = c("Constipation","Low Normal","High Normal","Diarrhea")) +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2), limits = order) +
+    xlab("BMF Category") +
+    ylab("Body Mass Index")+
+    ggtitle("C) Cohort by BMI")+
+    #geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.5, size=1.5, stat = "count", position = "fill", direction = "y", segment.color = NA,  point.size = NA, force =20, force_pull=20, ylim = c(0.1,0.9))+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=6), axis.title.y = element_text(size=5), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5.5), legend.title = element_text(size = 9))
+plot_BMI
+```
+
+
+```{r}
+
+plot_LDL <- ggplot(df, aes(x = bowel, y = LDL, fill = bowel, group = factor(bowel))) + 
+    geom_boxplot()+
+    scale_fill_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)], name="BMF Category",limits = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), labels = c("Constipation","Low Normal","High Normal","Diarrhea")) +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2), limits = order) +
+    scale_y_log10() +
+    xlab("BMF Category") +
+    ylab("Log-scale Level of Analyte")+
+    ggtitle("D) Cohort by LDL")+
+    #geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.5, size=1.5, stat = "count", position = "fill", direction = "y",  segment.color = NA, point.size = NA, force =20, force_pull=20, ylim = c(0.1,0.9))+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=5), axis.title.y = element_text(size=5), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5), legend.title = element_text(size = 9))+
+    coord_cartesian(clip="off")+
+  scale_color_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)])
+plot_LDL
+```
+
+
+```{r}
+plot_CRP <- ggplot(df, aes(x = bowel, y = CRP, fill = bowel, group = factor(bowel))) + 
+    geom_boxplot()+
+    scale_fill_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)], name="BMF Category",limits = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), labels = c("Constipation","Low\nNormal","High\nNormal","Diarrhea")) +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2), limits = order) +
+   scale_y_log10() +
+    xlab("BMF Category") +
+    ylab("Log-scale Level of Analyte")+
+    ggtitle("F) Cohort by CRP")+
+    #geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.5, size=1.5, stat = "count", position = "fill", direction = "y",  segment.color = NA, point.size = NA, force =20, force_pull=20, ylim = c(0.1,0.9))+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=5), axis.title.y = element_text(size=5), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5), legend.title = element_text(size = 9))+
+    coord_cartesian(clip="off")+
+  scale_color_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)])
+plot_CRP
+```
+
+
+```{r}
+plot_PC1 <- ggplot(df, aes(x = bowel, y = PC1, fill = bowel, group = factor(bowel))) + 
+    geom_boxplot()+
+    scale_fill_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)], name="BMF Category",limits = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), labels = c("Constipation","Low\nNormal","High\nNormal","Diarrhea")) +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2), limits = order) +
+    xlab("BMF Category") +
+    ylab("Log-scale PC1 Value")+
+    ggtitle("D) Cohort by PC1")+
+    #geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.5, size=1.5, stat = "count", position = "fill", direction = "y",  segment.color = NA, point.size = NA, force =20, force_pull=20, ylim = c(0.1,0.9))+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=5), axis.title.y = element_text(size=5), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5), legend.title = element_text(size = 9))+
+  scale_color_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)])+
+  scale_y_log10()
+plot_PC1
+
+plot_PC2 <- ggplot(df, aes(x = bowel, y = PC2, fill = bowel, group = factor(bowel))) + 
+    geom_boxplot()+
+    scale_fill_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)], name="BMF Category",limits = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), labels = c("Constipation","Low\nNormal","High\nNormal","Diarrhea")) +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2), limits = order) +
+    xlab("BMF Category") +
+    ylab("Log-scale PC2 Value")+
+    ggtitle("E) Cohort by PC2")+
+    #geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.5, size=1.5, stat = "count", position = "fill", direction = "y",  segment.color = NA, point.size = NA, force =20, force_pull=20, ylim = c(0.1,0.9))+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=5), axis.title.y = element_text(size=5), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5), legend.title = element_text(size = 9))+
+  scale_color_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)])+
+  scale_y_log10()
+plot_PC2
+
+
+plot_PC3 <- ggplot(df, aes(x = bowel, y = PC3, fill = bowel, group = factor(bowel))) + 
+    geom_boxplot()+
+    scale_fill_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)], name="BMF Category",limits = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), labels = c("Constipation","Low\nNormal","High\nNormal","Diarrhea")) +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2), limits = order) +
+    xlab("BMF Category") +
+    ylab("Log-scale PC3 Value")+
+    ggtitle("F) Cohort by PC3")+
+    #geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.5, size=1.5, stat = "count", position = "fill", direction = "y",  segment.color = NA, point.size = NA, force =20, force_pull=20, ylim = c(0.1,0.9))+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=5), axis.title.y = element_text(size=5), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5), legend.title = element_text(size = 9))+
+  scale_color_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)])+
+  scale_y_log10()
+  
+plot_PC3
+```
+
+
+```{r}
+plot_eGFR <- ggplot(df, aes(x = eGFR, fill = bowel)) + 
+    geom_bar(position="fill", stat="count") +
+    scale_fill_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)], name="BMF Category",limits = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), labels = c("Constipation","Low Normal","High Normal","Diarrhea")) +
+    #scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+    xlab("eGFR") +
+    ylab("Fraction of Individuals in BMF Category")+
+    ggtitle("F) Cohort by eGFR")+
+    geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.5, size=1, stat = "count", position = "fill", direction = "y",  segment.color = NA, point.size = NA, force =20, force_pull=20, ylim = c(0.1,0.9))+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=6), axis.title.y = element_text(size=5), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5.5), legend.title = element_text(size = 9))+
+  scale_color_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)])
+plot_eGFR
+```
+
+
+```{r}
+plot_A1C <- ggplot(df, aes(x = bowel, y = A1C, fill = bowel, group = factor(bowel))) + 
+    geom_boxplot()+
+    scale_fill_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)], name="BMF Category",limits = c("Constipation","Low\nNormal","High\nNormal","Diarrhea"), labels = c("Constipation","Low\nNormal","High\nNormal","Diarrhea")) +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2), limits = order) +
+    scale_y_log10() +
+    xlab("BMF Category") +
+    ylab("Log-scale Level of Analyte")+
+    ggtitle("E) Cohort by A1C")+
+    #geom_label_repel(aes(label = paste0("n = ",..count..)), label.size = 0.5, size=1.5, stat = "count", position = "fill", direction = "y",  segment.color = NA, point.size = NA, force =20, force_pull=20, ylim = c(0.1,0.9))+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=5), axis.title.y = element_text(size=5), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5), legend.title = element_text(size = 9))+
+    coord_cartesian(clip="off")+
+  scale_color_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)])
+plot_A1C
+```
+
+
+```{r}
+ptr <- (read.csv(file = '../Final_Analysis/PTRcohort.csv'))
+order <- c("Constipation", "Low\nNormal", "High\nNormal", "Diarrhea")
+#pair-wise comparison
+ptr$bowel <- factor(ptr$bowel, levels = c(1,2,3,4), labels = order)
+ptr$public_client_id <- as.character(ptr$public_client_id)
+ptr <- ptr %>% distinct(public_client_id, .keep_all = TRUE)
+#ptr <- ptr[c('overall_means','bowel')]
+
+p <- t.test(ptr[ptr$bowel == 'Low\nNormal',]$overall_means, ptr[ptr$bowel == 'High\nNormal',]$overall_means, data = ptr)
+
+plot_ptr <- ggplot(ptr, aes(x = ptr$bowel, y = ptr$overall_means)) + 
+    geom_jitter(aes(x = ptr$bowel, y = ptr$overall_means, color = ptr$bowel),size=4,cex=7) +
+    geom_boxplot(aes(x = factor(ptr$bowel), alpha = 0)) +
+    scale_x_discrete(limits = order, labels = order,
+                     guide = guide_axis(n.dodge = 2)) +
+    ggtitle("G) Log-scale\nCommunity Average PTR\nPer Individual") +
+    xlab("BMF Category")+
+    ylab("Log-scale Community Average PTR\nPer Individual")+
+    scale_y_log10()+
+    geom_signif(comparisons = list(c("Low\nNormal","High\nNormal")), step_increase = 0.5, textsize = 4,
+                map_signif_level = TRUE, annotations = sprintf(p$p.value, fmt = 't-test P = %#.3f'))  +
+    #ylim(0.55,3.0) +
+    scale_color_discrete(name="BMF Category") +
+    scale_alpha(guide = 'none')+
+    guides(fill = guide_legend(override.aes = aes(color = NA)))+
+    theme(plot.title = element_text(size=9), axis.text.x = element_text(size=8), axis.title.y = element_text(size=7), axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5.5), legend.position = 'none')+
+  scale_color_manual(values = ggthemes::canva_palettes[['Primary colors with a vibrant twist']][c(2,3,4,1)])+
+coord_cartesian(clip="off")
+plot_ptr
+```
+
+
+```{r}
+
+BMF <- ggarrange(plotlist = list(plot_sex, plot_age, plot_BMI, plot_PC1, plot_PC2, plot_PC3), 
+                 legend = 'top', common.legend = TRUE, widths = c(20,20,20,20), heights = c(20,20,20,20), nrow = 2, ncol = 3)
+        #theme(plot.title = element_text(size=9), axis.title.y = element_text(size = 6), 
+             # axis.title.x = element_text(size = 9), axis.text.y = element_text(size = 5.5), legend.position = 'none')
+
+
+mental_anx <- ggarrange(plotlist = list(plot_anx), 
+                 legend = 'none', common.legend = TRUE, nrow = 1, ncol = 1)
+
+mental_dep <- ggarrange(plotlist = plot_dep[1:length(plot_dep)], 
+                 legend = 'none', common.legend = TRUE, nrow = 2, ncol = 3)
+
+
+result <- ggarrange(BMF,ggarrange(mental_anx,mental_dep, widths = c(20,50,50,50,50,50,50), heights = c(170,90,90,90,90,90)),  widths = c(20,20), heights = c(70,50), label.y = "Fraction of Individuals in BMF Category", legend = 'top', common.legend = TRUE, nrow = 2, ncol = 1)
+
+ggsave(
+  "SexBMIPTR.png",
+  plot = BMF,
+  device = NULL,
+  path = NULL,
+  scale = 1.5,
+  width = NA,
+  height = NA,
+  units = c("in", "cm", "mm", "px"),
+  dpi = 300
+)
+```
+
+
+```{r}
+result
+```
+
+```{r}
+set
+```
+
+
+```{r}
+#Linear model of PTR data:
+ptr <- (read.csv(file = '../Final_Analysis/PTRlr.csv'))
+#ptr[1] <- NULL
+order <- c("Constipation", "Low\nNormal", "High\nNormal", "Diarrhea")
+#pair-wise comparison
+#colnames(ptr)[12]<- 'GLYCOHEMOGLOBIN.A1C'
+ptr$bowel <- factor(ptr$bowel, levels = c(1,2,3,4), labels = order)
+ptr$public_client_id <- as.character(ptr$public_client_id)
+ptr <- within(ptr, bowel <- relevel(bowel, ref = "High\nNormal"))
+ptr <- ptr %>% distinct(public_client_id, .keep_all = TRUE)
+model <- lm(overall_means ~ bowel + eGFR + sex + age + BMI_CALC + CRP.HIGH.SENSITIVITY + LDL.CHOL.CALCULATION + GLYCOHEMOGLOBIN.A1C + PC1 + PC2 + PC3, data = ptr)
+summary(model)
+```
+
+
+```{r}
+summary(aov(overall_means ~ bowel + eGFR + sex + age + BMI_CALC + CRP.HIGH.SENSITIVITY + LDL.CHOL.CALCULATION + GLYCOHEMOGLOBIN.A1C + PC1 + PC2 + PC3, data = ptr))
+
+summary(aov(overall_means ~ bowel, data = ptr))
+```
+
+
+```{r}
+count(statdata$sex=="F")
+sd(statdata$BMI_CALC)
+
+statdata
+```
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

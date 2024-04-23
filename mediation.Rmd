@@ -1,0 +1,247 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+#load some useful libraries
+require(foreign)
+library(foreign)
+require(ggplot2)
+require(MASS)
+require(Hmisc)
+require(reshape2)
+library(stringr)
+library(rlist)
+library(rlang)
+library(forcats)
+library(dplyr)
+library(tidyverse)
+#library(ggh4x)
+require(tidyselect)
+library(DataCombine)
+library(ggrepel)
+library(ggbeeswarm)
+library(ggsignif)
+library(ggpubr)
+library(mediation)
+```
+
+
+```{r}
+require(mediation)
+med <- read_csv('mediation.csv')
+med[1] <- NULL
+med$bowel <- factor(med$bowel, levels = c(1,2,3,4), labels = c('Constipation','Low\nNormal','High\nNormal','Diarrhea'))
+med$bowel <- factor(med$bowel, levels = c('Constipation','Low\nNormal','High\nNormal','Diarrhea'), labels = c('Constipation','Low\nNormal','High\nNormal','Diarrhea'), ordered = TRUE)
+med$sex <- factor(med$sex)
+names(med)[11] <- 'BMF'
+names(med)[22] <- 'meat'
+names(med)[23] <- 'proc_meat'
+names(med)[24] <- 'cruc_veg'
+names(med)[26] <- 'veg'
+names(med)[27] <- 'salad_raw_veg'
+names(med)[28] <- 'cooked_green_veg'
+names(med)[29] <- 'cooked_root_veg'
+sum(!is.na(med$veg))
+
+med <- med[,-c(24:25,27:29)]
+
+table(med$veg)
+
+med$public_client_id <- factor(med$public_client_id)
+med
+```
+
+
+```{r}
+med$combined_meat_freq <- NA  # Create an empty column (Initially set as NA)
+
+table(med$proc_meat)
+table(med$meat)
+
+for (i in 1:nrow(med)) {
+  meat_freq <- med$meat[i]
+  proc_meat_freq <- med$proc_meat[i]
+
+  # Extract numbers for prioritization
+  meat_num <- as.numeric(str_extract(meat_freq, "\\d+"))
+  proc_meat_num <- as.numeric(str_extract(proc_meat_freq, "\\d+"))
+  
+  # Handle missing values before priority comparison
+  if(is.na(meat_num)) { meat_num <- 0 } 
+  if(is.na(proc_meat_num)) { proc_meat_num <- 0 }  
+
+  # Direct category assignment based on numbers (if applicable)
+  if (meat_num >= 4) {  # Prioritize 'meat' if its number suggests >= 2/week
+    med$combined_meat_freq[i] <- "More than 3 times per month"
+  } else if (proc_meat_num >= 4) {  # Prioritize 'proc_meat' if its number suggests >= 2/week
+    med$combined_meat_freq[i] <- "More than 3 times per month"
+  } else if (meat_num > 2) {  # Prioritize 'meat' if its number suggests > 1/month
+    med$combined_meat_freq[i] <- "3 times per month or less"
+  } else if (proc_meat_num > 2) {  # Prioritize 'proc_meat' if its number suggests > 1/month
+    med$combined_meat_freq[i] <- "3 times per month or less"
+  } else if (meat_num > 0) {  # Prioritize 'meat' if it's presently valued but proc_meat may not be present
+    med$combined_meat_freq[i] <- "3 times per month or less"
+  } else if (proc_meat_num > 0) {  # Prioritize 'proc_meat' if it's presently valued but proc_meat may not be present
+    med$combined_meat_freq[i] <- "3 times per month or less"
+  # Fallback to text-based logic if numbers fall within the same category
+  } else { 
+    if (meat_freq %in% c("(1) Less than once per month", "(2) 1-3 times per month") || proc_meat_freq %in% c("(1) Less than once per month", "(2) 1-3 times per month")) {
+      med$combined_meat_freq[i] <- "3 times per month or less"
+    } else if (meat_freq %in% c("(3) Once per week", "(4) 2-4 times per week","(6) Once per day","(7) 2-3 times per day") || proc_meat_freq %in% c("(2) 1-3 times per month","(3) Once per week","(4) 2-4 times per week")) {
+      med$combined_meat_freq[i] <- "More than 3 times per month"
+    } else {
+      med$combined_meat_freq[i] <- NA
+    }
+  }
+}
+
+med$combined_meat_freq <- factor(med$combined_meat_freq)
+med$combined_meat_freq_merged <- NA
+med$BMF_merged <- NA
+med$combined_meat_freq_merged <- ifelse(med$combined_meat_freq %in% c("More than 3 times per month", "3 times per month or less"), "Meat Data", "No Meat Data")
+med$BMF_merged <- ifelse(med$BMF %in% c("High\nNormal","Diarrhea"), "High","Low")
+med$combined_meat_freq_merged <- factor(med$combined_meat_freq_merged, ordered = TRUE) # Ensure it's a factor
+med$veg <- factor(med$veg, ordered = TRUE)
+med$veg_merged <- NA
+med$BMF_merged <- ifelse(med$BMF %in% c("High\nNormal","Diarrhea"), "High","Low")
+med$veg_merged <- ifelse(med$veg %in% c("(0) Zero/less than 1 per day","(1) 1"), "Low","High")
+
+med$veg_merged <- factor(med$veg_merged, ordered = TRUE)
+med$BMF_merged <- factor(med$BMF_merged, ordered = TRUE)
+
+med$BMF_merged <- factor(med$BMF_merged, ordered = TRUE)
+med$veg_merged <- factor(med$veg_merged, ordered = TRUE)
+med$combined_meat_freq_merged <- factor(med$combined_meat_freq_merged, ordered = TRUE)
+
+med$veg <- factor(med$veg, ordered = TRUE)
+table(addNA(med$combined_meat_freq_merged, ifany = TRUE))
+
+med
+
+model_m <- lm(`3-indoxyl sulfate` ~ BMF_merged + age + BMI_CALC + PC1 + PC2 + PC3
+              #+ combined_meat_freq_merged + veg_merged
+              , data = med)
+
+# Fit the outcome model
+outcome_model <- lm(eGFR ~ `3-indoxyl sulfate` + BMF_merged + age + BMI_CALC + PC1 + PC2 + PC3
+              #+ combined_meat_freq_merged + veg_merged
+              , data = med)
+
+med
+
+fit <- mediate(
+    mediator = '3-indoxyl sulfate',
+    outcome = 'eGFR',
+    treat = 'BMF_merged',  # Now using the merged column
+    control.value = "Low",  
+    treat.value = "High", 
+    model.y = outcome_model,
+    model.m = model_m,
+    boot = TRUE
+)
+# Summarize results for the current treatment level
+summary(fit)
+```
+
+
+```{r}
+table(med$BsMF)
+```
+
+
+```{r}
+
+# Assuming your data frame is named 'df' 
+triangle <- med
+triangle$BMF <- ifelse(med$BMF %in% c("High\nNormal","Diarrhea"), "High","Low")
+triangle$BMF <- factor(triangle$BMF)  # Ensure it remains a factor variable
+triangle <- within(triangle, BMF <- relevel(BMF, ref = "Low"))
+triangle
+
+summary(glm(get('3-indoxyl sulfate') ~ BMF, data = triangle))
+
+summary(glm(eGFR ~ get('3-indoxyl sulfate'), data = triangle))
+
+summary(glm(eGFR ~ BMF, data = triangle))
+```
+
+
+```{r}
+med <- med[,-c(13:14)]
+
+med$veg <- factor(med$veg, ordered = TRUE)
+med <- DropNA(med)
+med$veg_merged <- NA
+med$BMF_merged <- ifelse(med$BMF %in% c("High\nNormal","Diarrhea"), "High","Low")
+med$veg_merged <- ifelse(med$veg %in% c("(0) Zero/less than 1 per day","(1) 1"), "Low","High")
+
+med$veg_merged <- factor(med$veg_merged, ordered = TRUE)
+med$BMF_merged <- factor(med$BMF_merged, ordered = TRUE)
+
+# Fit the outcome model
+outcome_model <- lm(eGFR ~ `3-indoxyl sulfate` + veg_merged + BMF_merged, data = med)
+
+model_m <- lm(`3-indoxyl sulfate` ~ veg_merged + BMF_merged, data = med)
+
+med
+
+# Fit the outcome model
+outcome_model <- lm(eGFR ~ `3-indoxyl sulfate` + veg_merged + BMF_merged, data = med)
+
+fit <- mediate(
+    mediator = '3-indoxyl sulfate',
+    outcome = 'eGFR',
+    treat = 'veg_merged',  # Now using the merged column
+    control.value = "High",  
+    treat.value = "Low", 
+    model.y = outcome_model,
+    model.m = model_m,
+    boot = TRUE
+)
+print(summary(fit))
+```
+
+
+```{r}
+#library(forcats)
+med$veg_merged <- NA
+med$BMF_merged <- ifelse(med$BMF %in% c("High\nNormal","Diarrhea"), "High","Low")
+med$veg_merged <- ifelse(med$BMF %in% c("(0) Zero/less than 1 per day"), "Low","High")
+model_m <- lm(`3-indoxyl sulfate` ~ veg_merged + BMF_merged, data = med)
+
+# Fit the outcome model
+outcome_model <- lm(eGFR ~ `3-indoxyl sulfate` + combined_meat_freq_merged + BMF_merged + veg_merged, data = med)
+
+med
+
+fit <- mediate(
+    mediator = '3-indoxyl sulfate',
+    outcome = 'eGFR',
+    treat = 'combined_meat_freq_merged',  # Now using the merged column
+    control.value = "No Meat Data",  
+    treat.value = "Meat Data", 
+    model.y = outcome_model,
+    model.m = model_m,
+    boot = TRUE
+)
+# Summarize results for the current treatment level
+summary(fit)  
+
+```
+
+
+```{r}
+table(med$veg)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
